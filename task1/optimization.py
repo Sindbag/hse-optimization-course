@@ -4,6 +4,8 @@ import scipy
 from datetime import datetime
 from collections import defaultdict
 
+from scipy.optimize.linesearch import scalar_search_wolfe2
+
 
 class LineSearchTool(object):
     """
@@ -75,8 +77,38 @@ class LineSearchTool(object):
         alpha : float or None if failure
             Chosen step size
         """
-        # TODO: Implement line search procedures for Armijo, Wolfe and Constant steps.
-        return None
+        phi = lambda x: oracle.func_directional(x_k, d_k, x)
+        dphi = lambda x: oracle.grad_directional(x_k, d_k, x)
+        phi0, dphi0 = phi(0), dphi(0)
+
+        def wolfe():
+            a, *_ = scalar_search_wolfe2(
+                phi, dphi, phi0, None, dphi0, self.c1, self.c2
+            )
+            if a: return a
+
+            # fallback to Armijo method
+            self._method = 'Armijo'
+            del self.c2
+            return self.line_search(oracle, x_k, d_k, previous_alpha)
+
+        def armijo():
+            a = previous_alpha or self.alpha_0
+            cond = lambda alpha: phi(alpha) > (phi0 + alpha * dphi0 * self.c1)
+
+            while cond(a): a /= 2
+            return a
+
+        def constant():
+            return self.c
+
+        mets_map = {
+            'Wolfe': wolfe,
+            'Armijo': armijo,
+            'Constant': constant
+        }
+
+        return mets_map[self._method]()
 
 
 def get_line_search_tool(line_search_options=None):
@@ -140,11 +172,30 @@ def gradient_descent(oracle, x_0, tolerance=1e-5, max_iter=10000,
     """
     history = defaultdict(list) if trace else None
     line_search_tool = get_line_search_tool(line_search_options)
-    x_k = np.copy(x_0)
 
-    # TODO: Implement gradient descent
-    # Use line_search_tool.line_search() for adaptive step size.
-    return x_k, 'success', history
+    x_k, a_k, start = np.copy(x_0), None, datetime.now()
+    norm0 = np.linalg.norm(oracle.grad(x_0)) ** 2
+
+    for i in range(max_iter):
+        d_k = -oracle.grad(x_k)
+        a_k = line_search_tool.line_search(
+            oracle,
+            x_k,
+            d_k,
+            2 * a_k if a_k else None
+        )
+        norm = np.linalg.norm(-d_k)
+
+        chk = check(i, x_k, norm, norm0, oracle, tolerance, history, display, trace, start)
+        if chk:
+            return chk
+        x_k = x_k + d_k * a_k
+
+    chk = check(max_iter, x_k, np.linalg.norm(oracle.grad(x_k)),
+                norm0, oracle, tolerance, history, display, trace, start)
+    if chk:
+        return chk
+    return x_k, 'iterations_exceeded', history
 
 
 def newton(oracle, x_0, tolerance=1e-5, max_iter=100,
@@ -199,8 +250,41 @@ def newton(oracle, x_0, tolerance=1e-5, max_iter=100,
     """
     history = defaultdict(list) if trace else None
     line_search_tool = get_line_search_tool(line_search_options)
-    x_k = np.copy(x_0)
+    x_k, start, norm0 = np.copy(x_0), datetime.now(), np.linalg.norm(oracle.grad(x_0)) ** 2
 
-    # TODO: Implement Newton's method.
-    # Use line_search_tool.line_search() for adaptive step size.
-    return x_k, 'success', history
+    for i in range(max_iter):
+        g_k = - oracle.grad(x_k)
+        norm = np.linalg.norm(-g_k)
+        chk = check(i, x_k, norm, norm0, oracle, tolerance, history, display, trace, start)
+        if chk:
+            return chk
+
+        try:
+            hess = oracle.hess(x_k)
+            c, lower = scipy.linalg.cho_factor(hess)
+        except LinAlgError:
+            return x_k, 'newton_direction_error', history
+
+        d_k = scipy.linalg.cho_solve((c, lower), g_k)
+        a_k = line_search_tool.line_search(oracle, x_k, d_k, 1)
+        x_k = x_k + d_k * a_k
+
+    chk = check(max_iter, x_k, np.linalg.norm(oracle.grad(x_k)),
+                norm0, oracle, tolerance, history, display, trace, start)
+    if chk:
+        return chk
+    return x_k, 'iterations_exceeded', history
+
+
+def check(i, x, norm, norm0, oracle, tolerance, history, display, trace, start):
+    if display:
+        print("iter #{0:4}:\nx_k = {1}\nnorm = {2}".format(i, x, norm))
+
+    if trace:
+        if x.size <= 2: history['x'].append(x)
+        history['time'].append(datetime.now() - start)
+        history['func'].append(oracle.func(x))
+        history['grad_norm'].append(norm)
+
+    if norm ** 2 <= tolerance * norm0:
+        return x, 'success', history
