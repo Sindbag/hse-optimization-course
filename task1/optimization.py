@@ -82,21 +82,16 @@ class LineSearchTool(object):
         phi0, dphi0 = phi(0), dphi(0)
 
         def wolfe():
-            a, *_ = scalar_search_wolfe2(
-                phi, dphi, phi0, None, dphi0, self.c1, self.c2
-            )
-            if a: return a
-
+            a, *_ = scalar_search_wolfe2(phi, dphi, phi0, None, dphi0, self.c1, self.c2)
+            if a:
+                return a
             # fallback to Armijo method
-            self._method = 'Armijo'
-            del self.c2
-            return self.line_search(oracle, x_k, d_k, previous_alpha)
+            return LineSearchTool(method='Armijo', c1=self.c1, alpha_0=self.alpha_0).line_search(oracle, x_k, d_k, previous_alpha)
 
         def armijo():
             a = previous_alpha or self.alpha_0
-            cond = lambda alpha: phi(alpha) > (phi0 + alpha * dphi0 * self.c1)
-
-            while cond(a): a /= 2
+            while phi(a) > (phi0 + a * dphi0 * self.c1):
+                a /= 2
             return a
 
         def constant():
