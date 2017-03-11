@@ -1,6 +1,7 @@
 import numpy as np
 import scipy
 from scipy.special import expit
+from sklearn import datasets
 
 
 class BaseSmoothOracle(object):
@@ -98,7 +99,7 @@ class LogRegL2Oracle(BaseSmoothOracle):
 
     def hess(self, x):
         tmp = expit(self.b * self.matvec_Ax(x))
-        return self.matmat_ATsA(tmp * (1 - tmp)) / self.b.size + self.regcoef * np.identity(x.shape[0])
+        return self.matmat_ATsA(tmp * (1 - tmp)) / self.b.size + self.regcoef * np.identity(x.size)
 
 
 class LogRegL2OptimizedOracle(LogRegL2Oracle):
@@ -133,17 +134,17 @@ class LogRegL2OptimizedOracle(LogRegL2Oracle):
 
     def func(self, x):
         Ax = self.check_Av(x, 'prev_x')
-        return np.linalg.norm(np.logaddexp(0, -self.b * Ax), 1) / self.b.shape[0] + \
+        return np.linalg.norm(np.logaddexp(0, -self.b * Ax), 1) / self.b.size + \
                (self.regcoef * np.linalg.norm(x, 2) ** 2) / 2
 
     def grad(self, x):
         Ax = self.check_Av(x, 'prev_x')
-        return self.regcoef * x - self.matvec_ATx(self.b * (expit(- self.b * Ax))) / self.b.shape[0]
+        return self.regcoef * x - self.matvec_ATx(self.b * (expit(- self.b * Ax))) / self.b.size
 
     def hess(self, x):
         Ax = self.check_Av(x, 'prev_x')
         tmp = expit(self.b * Ax)
-        return self.matmat_ATsA(tmp * (1 - tmp)) / self.b.shape[0] + self.regcoef * np.identity(x.shape[0])
+        return self.matmat_ATsA(tmp * (1 - tmp)) / self.b.size + self.regcoef * np.identity(x.size)
 
     def func_directional(self, x, d, alpha):
         new_x = x + alpha * d
@@ -156,7 +157,7 @@ class LogRegL2OptimizedOracle(LogRegL2Oracle):
             self.prev_new_x = new_x
             self.prev_new_Ax = new_Ax
 
-        return np.linalg.norm(np.logaddexp(0, -self.b * new_Ax), 1) / self.b.shape[0] + \
+        return np.linalg.norm(np.logaddexp(0, -self.b * new_Ax), 1) / self.b.size + \
                (self.regcoef * np.linalg.norm(new_x, 2) ** 2) / 2
 
     def grad_directional(self, x, d, alpha):
@@ -171,7 +172,7 @@ class LogRegL2OptimizedOracle(LogRegL2Oracle):
             self.prev_new_Ax = new_Ax
 
         return self.regcoef * np.dot(np.transpose(new_x), d) - \
-               np.dot(self.b * (expit(- self.b * new_Ax)), Ad) / self.b.shape[0]
+               np.dot(self.b * (expit(- self.b * new_Ax)), Ad) / self.b.size
 
 
 def create_log_reg_oracle(A, b, regcoef, oracle_type='usual'):
@@ -184,6 +185,9 @@ def create_log_reg_oracle(A, b, regcoef, oracle_type='usual'):
 
     if scipy.sparse.issparse(A):
         A = scipy.sparse.csr_matrix(A)
+        # redefine if matrix was not CSR
+        matvec_Ax = lambda x: A.dot(x)
+        matvec_ATx = lambda x: A.T.dot(x)
         matmat_ATsA = lambda x: matvec_ATx(matvec_ATx(scipy.sparse.diags(x)).T)
     else:
         matmat_ATsA = lambda x: np.dot(matvec_ATx(np.diag(x)), A)
@@ -238,3 +242,25 @@ def hess_finite_diff(func, x, eps=1e-5):
             res[i][j] = func(x + eps * (e[i] + e[j]))- tmp[j] - tmp[i] + f
 
     return res / (eps ** 2)
+
+
+def grad_hess_checker():
+    A, b = datasets.make_classification(random_state=16)
+    print('A:', A)
+    print('b:', b)
+
+    log = create_log_reg_oracle(A, b, 0.5, oracle_type='usual')
+    x = np.ones(30)
+
+    log_grad = log.grad(x)
+    finite_grad = grad_finite_diff(log.func, x)
+    print('log_grad:', log_grad)
+    print('finite_grad:', finite_grad)
+    print('diff grad:', finite_grad - log_grad)
+
+    log_hess = log.hess(x)
+    finite_hess = hess_finite_diff(log.func, x)
+    print('log_hess:', log_hess)
+    print('finite_hess:', finite_hess)
+    print('diff hess:', finite_hess - log_hess)
+

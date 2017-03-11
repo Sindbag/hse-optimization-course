@@ -168,8 +168,9 @@ def gradient_descent(oracle, x_0, tolerance=1e-5, max_iter=10000,
     history = defaultdict(list) if trace else None
     line_search_tool = get_line_search_tool(line_search_options)
 
-    x_k, a_k, start = np.copy(x_0), None, datetime.now()
-    norm0 = np.linalg.norm(oracle.grad(x_0)) ** 2
+    x_k, a_k = np.copy(x_0), None
+    norm0, start = np.linalg.norm(oracle.grad(x_0)) ** 2, datetime.now()
+    stop = tolerance * norm0
 
     for i in range(max_iter):
         d_k = -oracle.grad(x_k)
@@ -181,13 +182,13 @@ def gradient_descent(oracle, x_0, tolerance=1e-5, max_iter=10000,
         )
         norm = np.linalg.norm(-d_k)
 
-        chk = check(i, x_k, norm, norm0, oracle, tolerance, history, display, trace, start)
+        chk = check(i, x_k, norm, stop, oracle, history, display, trace, start)
         if chk:
             return chk
         x_k = x_k + d_k * a_k
 
     chk = check(max_iter, x_k, np.linalg.norm(oracle.grad(x_k)),
-                norm0, oracle, tolerance, history, display, trace, start)
+                stop, oracle, history, display, trace, start)
     if chk:
         return chk
     return x_k, 'iterations_exceeded', history
@@ -245,41 +246,43 @@ def newton(oracle, x_0, tolerance=1e-5, max_iter=100,
     """
     history = defaultdict(list) if trace else None
     line_search_tool = get_line_search_tool(line_search_options)
-    x_k, start, norm0 = np.copy(x_0), datetime.now(), np.linalg.norm(oracle.grad(x_0)) ** 2
+    x_k, norm0 = np.copy(x_0), np.linalg.norm(oracle.grad(x_0)) ** 2
+    stop = tolerance * norm0
+    start = datetime.now()
 
     for i in range(max_iter):
-        g_k = - oracle.grad(x_k)
-        norm = np.linalg.norm(-g_k)
-        chk = check(i, x_k, norm, norm0, oracle, tolerance, history, display, trace, start)
+        g_k = -oracle.grad(x_k)
+        norm = np.linalg.norm(g_k)
+        chk = check(i, x_k, norm, stop, oracle, history, display, trace, start)
         if chk:
             return chk
 
         try:
             hess = oracle.hess(x_k)
-            c, lower = scipy.linalg.cho_factor(hess)
+            d_k = scipy.linalg.cho_solve(scipy.linalg.cho_factor(hess), g_k)
         except LinAlgError:
             return x_k, 'newton_direction_error', history
 
-        d_k = scipy.linalg.cho_solve((c, lower), g_k)
-        a_k = line_search_tool.line_search(oracle, x_k, d_k, 1)
+        a_k = line_search_tool.line_search(oracle, x_k, d_k)
         x_k = x_k + d_k * a_k
 
     chk = check(max_iter, x_k, np.linalg.norm(oracle.grad(x_k)),
-                norm0, oracle, tolerance, history, display, trace, start)
+                stop, oracle, history, display, trace, start)
     if chk:
         return chk
     return x_k, 'iterations_exceeded', history
 
 
-def check(i, x, norm, norm0, oracle, tolerance, history, display, trace, start):
+def check(i, x, norm, stop, oracle, history, display, trace, start):
     if display:
         print("iter #{0:4}:\nx_k = {1}\nnorm = {2}".format(i, x, norm))
 
     if trace:
-        if x.size <= 2: history['x'].append(x)
-        history['time'].append(datetime.now() - start)
+        if x.size <= 2:
+            history['x'].append(x)
+        history['time'].append((datetime.now() - start).total_seconds())
         history['func'].append(oracle.func(x))
         history['grad_norm'].append(norm)
 
-    if norm ** 2 <= tolerance * norm0:
+    if norm ** 2 <= stop:
         return x, 'success', history
